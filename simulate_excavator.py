@@ -77,7 +77,7 @@ class ExcavatorExample:
         builder.default_shape_cfg.mu = 0.6
 
         base_xform = wp.transform(
-            wp.vec3(0.0, 0.0, 0.175 * SCALE), wp.quat_identity()
+            wp.vec3(0.0, 0.0, 0.22 * SCALE), wp.quat_identity()
         )
 
         if usd_path:
@@ -137,7 +137,7 @@ class ExcavatorExample:
         SolverImplicitMPM.register_custom_attributes(builder)
 
         # ── Sand particles (into the SAME builder) ────────────────────────────
-        voxel_size = 0.015 * SCALE
+        voxel_size = 0.010 * SCALE
         self._emit_particles(builder, voxel_size)
 
         # ── Finalize single model ──────────────────────────────────────────────
@@ -167,7 +167,7 @@ class ExcavatorExample:
         mpm_options.tolerance       = 1.0e-5
         mpm_options.grid_type       = "fixed"
         mpm_options.grid_padding    = 10
-        mpm_options.max_active_cell_count = 1 << 18  # 262144 — headroom for scooped particles spreading
+        mpm_options.max_active_cell_count = 1 << 19  # 524288 — headroom for 276k particles spreading
         mpm_options.strain_basis    = "P0"
         mpm_options.max_iterations  = 50
         mpm_options.critical_fraction = 0.0
