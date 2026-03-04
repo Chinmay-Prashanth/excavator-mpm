@@ -130,8 +130,14 @@ class ExcavatorExample:
         if self._bucket_dof is not None:
             builder.joint_q[self._bucket_dof] = 0.2
 
-        # ── Ground plane ──────────────────────────────────────────────────────
+        # ── Ground plane + side walls ─────────────────────────────────────────
         builder.add_ground_plane()
+        # Invisible containment walls at y = ±0.5*S (infinite planes, no visual)
+        # plane=(a,b,c,d) → normal (a,b,c), position = -(d/|n|)*n̂
+        # Wall at y = +0.5*S, normal pointing -Y
+        builder.add_shape_plane(plane=(0.0, -1.0, 0.0,  0.5 * SCALE), width=0.0, length=0.0)
+        # Wall at y = -0.5*S, normal pointing +Y
+        builder.add_shape_plane(plane=(0.0,  1.0, 0.0,  0.5 * SCALE), width=0.0, length=0.0)
 
         # ── MPM particle attributes — must be registered BEFORE add_particle_grid
         SolverImplicitMPM.register_custom_attributes(builder)
@@ -186,7 +192,7 @@ class ExcavatorExample:
         self.mpm_solver.setup_collider(
             body_mass=wp.zeros_like(self.model.body_mass),
             body_q=self.state_0.body_q,
-            collider_thicknesses=[0.0, 0.75 * voxel_size],  # ground: none, bucket: 3/4 voxel (holds particles in floor)
+            collider_thicknesses=[0.0, 0.0, 0.0, 0.75 * voxel_size],  # ground, wall+Y, wall-Y: none; bucket: 3/4 voxel
         )
 
         # ── Viewer ────────────────────────────────────────────────────────────
@@ -200,7 +206,8 @@ class ExcavatorExample:
         """
         Sand bed in front of and below the initial bucket reach.
 
-        Bed covers X = 0.10*S → 0.42*S, Y = ±0.15*S, Z = 0 → 0.10*S (scaled).
+        Bed covers X = 0.10*S → 0.42*S, Y = ±0.10*S, Z = 0 → 0.10*S (scaled).
+        Invisible side walls at Y = ±0.50*S contain all particles.
 
         IMPORTANT: bed_lo.z is raised by one particle radius after cell_size is
         computed.  This ensures the lowest jittered particles (jitter offset =
@@ -210,8 +217,8 @@ class ExcavatorExample:
         particles_per_cell = 3.0
         density = 1000.0  # kg/m³  granular example default
 
-        bed_lo = np.array([0.10 * S, -0.15 * S, 0.0])
-        bed_hi = np.array([0.42 * S,  0.15 * S, 0.10 * S])
+        bed_lo = np.array([0.10 * S, -0.1 * S, 0.0])
+        bed_hi = np.array([0.42 * S,  0.1 * S, 0.1 * S])
 
         bed_res = np.array(
             np.ceil(particles_per_cell * (bed_hi - bed_lo) / voxel_size), dtype=int
