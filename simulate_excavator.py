@@ -62,8 +62,8 @@ class ExcavatorExample:
     def __init__(self, viewer, usd_path: str | None = None):
         self.fps = 60
         self.frame_dt = 1.0 / self.fps
-        self.sim_substeps = 4
-        self.sim_dt = self.frame_dt / self.sim_substeps
+        self.sim_substeps = 1          # matches granular example: one implicit MPM step per frame
+        self.sim_dt = self.frame_dt    # full frame_dt; finite_difference velocity = Δbody/frame_dt ✓
         self.sim_time = 0.0
         self.viewer = viewer
 
@@ -154,9 +154,7 @@ class ExcavatorExample:
         newton.eval_fk(
             self.model, self.model.joint_q, self.model.joint_qd, self.state_0
         )
-        # CPU shadow for scripted joint angles (current and previous frame)
-        self._joint_q_np      = self.model.joint_q.numpy().copy()
-        self._prev_joint_q_np = self._joint_q_np.copy()  # for per-substep interpolation
+        self._joint_q_np = self.model.joint_q.numpy().copy()
 
         # Manual slider control state (toggled via GUI checkbox)
         self._manual = False
@@ -173,7 +171,7 @@ class ExcavatorExample:
         mpm_options.strain_basis    = "P0"
         mpm_options.max_iterations  = 50
         mpm_options.critical_fraction = 0.0
-        mpm_options.air_drag        = 0.5
+        mpm_options.air_drag        = 1.0   # granular example default
         mpm_options.collider_velocity_mode = "finite_difference"
 
         self.mpm_solver = SolverImplicitMPM(self.model, mpm_options)
@@ -210,7 +208,7 @@ class ExcavatorExample:
         """
         S = SCALE
         particles_per_cell = 3.0
-        density = 1734.0  # kg/m³  Chrono CRM Table 1
+        density = 1000.0  # kg/m³  granular example default
 
         bed_lo = np.array([0.10 * S, -0.15 * S, 0.0])
         bed_hi = np.array([0.42 * S,  0.15 * S, 0.10 * S])
@@ -240,10 +238,11 @@ class ExcavatorExample:
             jitter=2.0 * radius,
             radius_mean=radius,
             custom_attributes={
-                "mpm:friction":        0.80,   # μs Chrono CRM Table 1
-                "mpm:young_modulus":   1.0e15, # E: rigid limit for granular MPM (granular example default)
-                                               # Chrono CRM's 1MPa is for SPH @0.2ms dt — not portable to implicit MPM
-                "mpm:poisson_ratio":   0.30,   # ν  Chrono CRM Table 1
+                "mpm:friction":              0.68,   # granular example default
+                "mpm:young_modulus":         1.0e15, # rigid limit — granular example default
+                "mpm:poisson_ratio":         0.30,   # granular example default
+                "mpm:yield_pressure":        1.0e12, # caps compressive yield — critical for stability
+                "mpm:tensile_yield_ratio":   0.0,    # no tensile strength (cohesionless sand)
             },
         )
 
@@ -294,45 +293,14 @@ class ExcavatorExample:
             curr_q[self._shoulder_dof] = shoulder
         if self._bucket_dof is not None:
             curr_q[self._bucket_dof] = bucket
-        prev_q = self._prev_joint_q_np
+        # Update arm FK for this frame (1 substep: finite_difference velocity = Δbody/frame_dt = true velocity)
+        self.state_0.joint_q.assign(curr_q)
+        newton.eval_fk(self.model, self.state_0.joint_q, self.state_0.joint_qd, self.state_0)
+        self.state_1.body_q.assign(self.state_0.body_q)
+        self.state_1.body_qd.assign(self.state_0.body_qd)
 
-        # MPM substep loop with per-substep interpolated kinematics.
-        #
-        # KEY FIX for "particles explode during lift":
-        #   Assigning the same body_q to all substeps causes the MPM's
-        #   finite_difference velocity mode to divide a full-frame displacement
-        #   by sim_dt instead of frame_dt — a 4× overestimate that creates
-        #   enormous contact impulses when the arm lifts fast.
-        #
-        #   Fix: interpolate joint angles linearly from prev→curr across the
-        #   substeps, run eval_fk per substep, and assign the INTERPOLATED
-        #   body_q to each state.  The finite_difference velocity then equals
-        #   (substep_Δbody) / sim_dt = (frame_Δbody / substeps) / (frame_dt / substeps)
-        #   = frame_Δbody / frame_dt = the true arm velocity.
-        for substep in range(self.sim_substeps):
-            frac = (substep + 1) / self.sim_substeps  # 0.25 → 0.50 → 0.75 → 1.00
-            interp_q = prev_q + frac * (curr_q - prev_q)
-
-            # Compute FK for the interpolated pose on whichever state is currently state_0
-            self.state_0.joint_q.assign(interp_q)
-            newton.eval_fk(
-                self.model, self.state_0.joint_q, self.state_0.joint_qd, self.state_0
-            )
-            # Propagate the interpolated body transforms to state_1 as well
-            # so _project_outside sees the correct arm position
-            self.state_1.body_q.assign(self.state_0.body_q)
-            self.state_1.body_qd.assign(self.state_0.body_qd)
-
-            self.mpm_solver.step(
-                self.state_0, self.state_1, contacts=None, control=None, dt=self.sim_dt
-            )
-            # NOTE: _project_outside is intentionally NOT called here.
-            # The implicit MPM solver handles ground + bucket contact via the
-            # grid-level velocity constraint. Calling _project_outside after
-            # each substep fights the contact velocity the solver just computed
-            # for the moving bucket, causing oscillation that grows to NaN
-            # during the lift phase. The anymal example omits it for the same reason.
-            self.state_0, self.state_1 = self.state_1, self.state_0
+        self.mpm_solver.step(self.state_0, self.state_1, contacts=None, control=None, dt=self.sim_dt)
+        self.state_0, self.state_1 = self.state_1, self.state_0
 
         # NaN diagnostic — print once when particles first go NaN
         pq = self.state_0.particle_q.numpy()
@@ -343,8 +311,6 @@ class ExcavatorExample:
             print(f"[NaN] t={self.sim_time:.3f}s  shoulder={sh_deg:.1f}°  bucket={bk_deg:.1f}°  "
                   f"nan_particles={nan_count}/{self.model.particle_count}")
 
-        # Save current joint angles for next frame's interpolation
-        self._prev_joint_q_np = curr_q
         self._joint_q_np = curr_q
         self.sim_time += self.frame_dt
 
