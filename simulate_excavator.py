@@ -182,9 +182,13 @@ class ExcavatorExample:
         # reaction forces to bodies; arm moves purely from eval_fk.
         # state_in.body_q is read each step automatically, so the MPM always
         # sees the current arm positions.
+        # collider order: ground plane (-1) first, then bucket body.
+        # collider_thicknesses inflates the SDF so thin bucket walls (<<voxel_size)
+        # still catch particles — prevents penetration and lift-phase explosions.
         self.mpm_solver.setup_collider(
             body_mass=wp.zeros_like(self.model.body_mass),
             body_q=self.state_0.body_q,
+            collider_thicknesses=[0.0, 0.5 * 0.015 * SCALE],  # ground: none, bucket: half voxel
         )
 
         # ── Viewer ────────────────────────────────────────────────────────────
@@ -277,7 +281,7 @@ class ExcavatorExample:
             # Slew-rate limiter: arm chases slider target at max 0.8 rad/s.
             # Prevents large per-frame jumps from creating explosive
             # finite_difference velocities on contact with particles.
-            max_delta = 0.8 * self.frame_dt  # ~0.013 rad per frame @ 60 fps
+            max_delta = 1.5 * self.frame_dt  # ~0.025 rad per frame @ 60 fps
             prev_sh = self._joint_q_np[self._shoulder_dof]
             prev_bk = self._joint_q_np[self._bucket_dof]
             shoulder = prev_sh + float(np.clip(self._slider_shoulder - prev_sh, -max_delta, max_delta))
