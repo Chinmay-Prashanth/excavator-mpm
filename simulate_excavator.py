@@ -158,6 +158,11 @@ class ExcavatorExample:
         self._joint_q_np      = self.model.joint_q.numpy().copy()
         self._prev_joint_q_np = self._joint_q_np.copy()  # for per-substep interpolation
 
+        # Manual slider control state (toggled via GUI checkbox)
+        self._manual = False
+        self._slider_shoulder = float(self._joint_q_np[self._shoulder_dof])
+        self._slider_bucket   = float(self._joint_q_np[self._bucket_dof])
+
         # ── MPM solver ────────────────────────────────────────────────────────
         mpm_options = SolverImplicitMPM.Config()
         mpm_options.voxel_size      = voxel_size
@@ -268,7 +273,11 @@ class ExcavatorExample:
 
     def step(self):
         # Compute target joint angles for this frame
-        shoulder, bucket = self._scripted_targets()
+        if self._manual:
+            shoulder = self._slider_shoulder
+            bucket   = self._slider_bucket
+        else:
+            shoulder, bucket = self._scripted_targets()
         curr_q = self._joint_q_np.copy()
         if self._shoulder_dof is not None:
             curr_q[self._shoulder_dof] = shoulder
@@ -334,6 +343,27 @@ class ExcavatorExample:
             self._camera_framed = True
 
         self.viewer.end_frame()
+
+    # ── GUI (Newton auto-wires this to the side panel) ────────────────────────
+
+    def gui(self, imgui):
+        import math
+        _changed, self._manual = imgui.checkbox("Manual Control", self._manual)
+        imgui.separator()
+        if self._manual:
+            _c, self._slider_shoulder = imgui.slider_float(
+                "Shoulder (deg)", math.degrees(self._slider_shoulder),
+                -90.0, 90.0, "%.1f°"
+            )
+            self._slider_shoulder = math.radians(self._slider_shoulder)
+
+            _c, self._slider_bucket = imgui.slider_float(
+                "Bucket (deg)", math.degrees(self._slider_bucket),
+                -180.0, 180.0, "%.1f°"
+            )
+            self._slider_bucket = math.radians(self._slider_bucket)
+        else:
+            imgui.text_disabled("Scripted dig cycle running...")
 
     def test_final(self):
         voxel_size = self.mpm_solver.voxel_size
