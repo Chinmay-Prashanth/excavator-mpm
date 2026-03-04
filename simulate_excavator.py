@@ -274,8 +274,14 @@ class ExcavatorExample:
     def step(self):
         # Compute target joint angles for this frame
         if self._manual:
-            shoulder = self._slider_shoulder
-            bucket   = self._slider_bucket
+            # Slew-rate limiter: arm chases slider target at max 0.8 rad/s.
+            # Prevents large per-frame jumps from creating explosive
+            # finite_difference velocities on contact with particles.
+            max_delta = 0.8 * self.frame_dt  # ~0.013 rad per frame @ 60 fps
+            prev_sh = self._joint_q_np[self._shoulder_dof]
+            prev_bk = self._joint_q_np[self._bucket_dof]
+            shoulder = prev_sh + float(np.clip(self._slider_shoulder - prev_sh, -max_delta, max_delta))
+            bucket   = prev_bk + float(np.clip(self._slider_bucket   - prev_bk, -max_delta, max_delta))
         else:
             shoulder, bucket = self._scripted_targets()
         curr_q = self._joint_q_np.copy()
