@@ -167,7 +167,7 @@ class ExcavatorExample:
         mpm_options.tolerance       = 1.0e-5
         mpm_options.grid_type       = "fixed"
         mpm_options.grid_padding    = 10
-        mpm_options.max_active_cell_count = 1 << 16
+        mpm_options.max_active_cell_count = 1 << 18  # 262144 — headroom for scooped particles spreading
         mpm_options.strain_basis    = "P0"
         mpm_options.max_iterations  = 50
         mpm_options.critical_fraction = 0.0
@@ -186,7 +186,7 @@ class ExcavatorExample:
         self.mpm_solver.setup_collider(
             body_mass=wp.zeros_like(self.model.body_mass),
             body_q=self.state_0.body_q,
-            collider_thicknesses=[0.0, 0.75 * 0.015 * SCALE],  # ground: none, bucket: 3/4 voxel
+            collider_thicknesses=[0.0, 0.25 * 0.015 * SCALE],  # ground: none, bucket: 1/4 voxel (less overlap w/ ground)
         )
 
         # ── Viewer ────────────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ class ExcavatorExample:
         if self._manual:
             _c, self._slider_shoulder = imgui.slider_float(
                 "Shoulder (deg)", math.degrees(self._slider_shoulder),
-                -90.0, 90.0, "%.1f°"
+                -30.0, 60.0, "%.1f°"  # clamped: bucket stays above ground plane
             )
             self._slider_shoulder = math.radians(self._slider_shoulder)
 
