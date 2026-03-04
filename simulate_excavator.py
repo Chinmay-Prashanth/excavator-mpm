@@ -344,7 +344,7 @@ class ExcavatorExample:
         if self._manual:
             _c, self._slider_shoulder = imgui.slider_float(
                 "Shoulder (deg)", math.degrees(self._slider_shoulder),
-                -30.0, 60.0, "%.1f°"  # clamped: bucket stays above ground plane
+                -90.0, 90.0, "%.1f°"
             )
             self._slider_shoulder = math.radians(self._slider_shoulder)
 
