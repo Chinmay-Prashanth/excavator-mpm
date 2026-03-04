@@ -241,7 +241,8 @@ class ExcavatorExample:
             radius_mean=radius,
             custom_attributes={
                 "mpm:friction":        0.80,   # μs Chrono CRM Table 1
-                "mpm:young_modulus":   1.0e6,  # E  Chrono CRM Table 1 [Pa]
+                "mpm:young_modulus":   1.0e15, # E: rigid limit for granular MPM (granular example default)
+                                               # Chrono CRM's 1MPa is for SPH @0.2ms dt — not portable to implicit MPM
                 "mpm:poisson_ratio":   0.30,   # ν  Chrono CRM Table 1
             },
         )
