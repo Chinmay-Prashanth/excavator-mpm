@@ -188,7 +188,7 @@ class ExcavatorExample:
         self.mpm_solver.setup_collider(
             body_mass=wp.zeros_like(self.model.body_mass),
             body_q=self.state_0.body_q,
-            collider_thicknesses=[0.0, 0.5 * 0.015 * SCALE],  # ground: none, bucket: half voxel
+            collider_thicknesses=[0.0, 0.75 * 0.015 * SCALE],  # ground: none, bucket: 3/4 voxel
         )
 
         # ── Viewer ────────────────────────────────────────────────────────────
@@ -325,8 +325,22 @@ class ExcavatorExample:
             self.mpm_solver.step(
                 self.state_0, self.state_1, contacts=None, control=None, dt=self.sim_dt
             )
-            self.mpm_solver._project_outside(self.state_1, self.state_1, self.sim_dt)
+            # NOTE: _project_outside is intentionally NOT called here.
+            # The implicit MPM solver handles ground + bucket contact via the
+            # grid-level velocity constraint. Calling _project_outside after
+            # each substep fights the contact velocity the solver just computed
+            # for the moving bucket, causing oscillation that grows to NaN
+            # during the lift phase. The anymal example omits it for the same reason.
             self.state_0, self.state_1 = self.state_1, self.state_0
+
+        # NaN diagnostic — print once when particles first go NaN
+        pq = self.state_0.particle_q.numpy()
+        if np.any(np.isnan(pq)):
+            sh_deg = math.degrees(curr_q[self._shoulder_dof])
+            bk_deg = math.degrees(curr_q[self._bucket_dof])
+            nan_count = int(np.isnan(pq).any(axis=-1).sum())
+            print(f"[NaN] t={self.sim_time:.3f}s  shoulder={sh_deg:.1f}°  bucket={bk_deg:.1f}°  "
+                  f"nan_particles={nan_count}/{self.model.particle_count}")
 
         # Save current joint angles for next frame's interpolation
         self._prev_joint_q_np = curr_q
