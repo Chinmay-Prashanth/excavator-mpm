@@ -186,7 +186,7 @@ class ExcavatorExample:
         self.mpm_solver.setup_collider(
             body_mass=wp.zeros_like(self.model.body_mass),
             body_q=self.state_0.body_q,
-            collider_thicknesses=[0.0, 0.25 * 0.015 * SCALE],  # ground: none, bucket: 1/4 voxel (less overlap w/ ground)
+            collider_thicknesses=[0.0, 0.75 * 0.015 * SCALE],  # ground: none, bucket: 3/4 voxel (holds particles in floor)
         )
 
         # ── Viewer ────────────────────────────────────────────────────────────
