@@ -81,7 +81,7 @@ class ExcavatorExample:
         S = 1.0 if usd_path else SCALE
 
         base_xform = wp.transform(
-            wp.vec3(0.0, 0.0, 0.22 * S), wp.quat_identity()
+            wp.vec3(0.0, 0.0, 0.40 * S), wp.quat_identity()  # raised: bucket stays above ground at shoulder=-90deg
         )
 
         if usd_path:
@@ -164,9 +164,9 @@ class ExcavatorExample:
         SolverImplicitMPM.register_custom_attributes(builder)
 
         # ── Sand particles (into the SAME builder) ────────────────────────────
-        # USD (S=1): vox=0.006m → 312k particles, dia=2mm, ~72 FPS on RTX 4080 Laptop
-        # URDF (S=10): same ratio → 0.06m voxels
-        voxel_size = 0.006 * S
+        # USD (S=1): vox=0.010m → ~192k particles, dia=3.3mm, ~50-60 FPS on RTX 4080 Laptop
+        # URDF (S=10): same ratio → 0.10m voxels
+        voxel_size = 0.010 * S
         self._emit_particles(builder, voxel_size, S)
 
         # ── Finalize single model ──────────────────────────────────────────────
@@ -244,7 +244,7 @@ class ExcavatorExample:
         density = 1000.0  # kg/m³  granular example default
 
         bed_lo = np.array([0.10 * S, -0.1 * S, 0.0])
-        bed_hi = np.array([0.42 * S,  0.1 * S, 0.035 * S])  # 3.5 cm real height
+        bed_hi = np.array([0.42 * S,  0.1 * S, 0.10 * S])   # 10 cm real height — covers bucket reach from -60° to -90°
 
         bed_res = np.array(
             np.ceil(particles_per_cell * (bed_hi - bed_lo) / voxel_size), dtype=int
@@ -381,7 +381,7 @@ class ExcavatorExample:
         if self._manual:
             _c, self._slider_shoulder = imgui.slider_float(
                 "Shoulder (deg)", math.degrees(self._slider_shoulder),
-                -45.0, 90.0, "%.1f°"  # -45° safe limit: bucket hits ground at -50°
+                -90.0, 90.0, "%.1f°"
             )
             self._slider_shoulder = math.radians(self._slider_shoulder)
 
