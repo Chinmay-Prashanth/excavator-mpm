@@ -41,10 +41,11 @@ from newton.solvers import SolverImplicitMPM
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 URDF_PATH = Path("/home/chinmay/ASUPHD/EcoRobotics/Spring/V1/urdf/Idea_3.urdf")
+USD_PATH  = Path(__file__).parent / "arm.usd"
 
-# ── Scale factor ───────────────────────────────────────────────────────────────
-# All URDF dimensions are multiplied by SCALE.  10 → arm ~3.7 m long, which is
-# easy to see in the default Newton GL camera.
+# ── Scale factor (URDF only) ───────────────────────────────────────────────────
+# URDF meshes are in small units; ×10 → arm ~3.7 m, easy to see in GL viewer.
+# USD (arm.usd) is already in real meters — no scaling applied there.
 SCALE = 10.0
 
 
@@ -76,15 +77,25 @@ class ExcavatorExample:
         builder.default_shape_cfg.kf = 5.0e2
         builder.default_shape_cfg.mu = 0.6
 
+        # USD is in real meters (no scaling); URDF needs ×SCALE.
+        S = 1.0 if usd_path else SCALE
+
         base_xform = wp.transform(
-            wp.vec3(0.0, 0.0, 0.22 * SCALE), wp.quat_identity()
+            wp.vec3(0.0, 0.0, 0.22 * S), wp.quat_identity()
         )
 
         if usd_path:
-            print(f"Loading USD: {usd_path}")
+            print(f"Loading USD: {usd_path}  (real-scale, S=1)")
             builder.add_usd(
                 usd_path, xform=base_xform,
                 floating=False, collapse_fixed_joints=False,
+                override_root_xform=True,
+                # The USD has two ArticulationRootAPI prims; ignore the fixed-
+                # joint anchor so only one articulation is imported.
+                ignore_paths=["/World/Idea_3/root_joint"],
+                # Keep raw triangle meshes — CONVEX_MESH (type 10) is not
+                # supported by the MPM SDF collider builder.
+                skip_mesh_approximation=True,
             )
         else:
             print(f"Loading URDF: {URDF_PATH}  (scale={SCALE})")
@@ -135,16 +146,16 @@ class ExcavatorExample:
         # Invisible containment walls at y = ±0.5*S (infinite planes, no visual)
         # plane=(a,b,c,d) → normal (a,b,c), position = -(d/|n|)*n̂
         # Wall at y = +0.5*S, normal pointing -Y
-        builder.add_shape_plane(plane=(0.0, -1.0, 0.0,  0.5 * SCALE), width=0.0, length=0.0)
+        builder.add_shape_plane(plane=(0.0, -1.0, 0.0,  0.5 * S), width=0.0, length=0.0)
         # Wall at y = -0.5*S, normal pointing +Y
-        builder.add_shape_plane(plane=(0.0,  1.0, 0.0,  0.5 * SCALE), width=0.0, length=0.0)
+        builder.add_shape_plane(plane=(0.0,  1.0, 0.0,  0.5 * S), width=0.0, length=0.0)
 
         # ── MPM particle attributes — must be registered BEFORE add_particle_grid
         SolverImplicitMPM.register_custom_attributes(builder)
 
         # ── Sand particles (into the SAME builder) ────────────────────────────
-        voxel_size = 0.010 * SCALE
-        self._emit_particles(builder, voxel_size)
+        voxel_size = 0.010 * S
+        self._emit_particles(builder, voxel_size, S)
 
         # ── Finalize single model ──────────────────────────────────────────────
         self.model = builder.finalize()
@@ -166,6 +177,9 @@ class ExcavatorExample:
         self._manual = False
         self._slider_shoulder = float(self._joint_q_np[self._shoulder_dof])
         self._slider_bucket   = float(self._joint_q_np[self._bucket_dof])
+        # Smoothed joint values — exponential filter chases slider target
+        self._smooth_shoulder = self._slider_shoulder
+        self._smooth_bucket   = self._slider_bucket
 
         # ── MPM solver ────────────────────────────────────────────────────────
         mpm_options = SolverImplicitMPM.Config()
@@ -202,18 +216,18 @@ class ExcavatorExample:
 
     # ── Particle emission ─────────────────────────────────────────────────────
 
-    def _emit_particles(self, builder: newton.ModelBuilder, voxel_size: float):
+    def _emit_particles(self, builder: newton.ModelBuilder, voxel_size: float, S: float):
         """
         Sand bed in front of and below the initial bucket reach.
 
-        Bed covers X = 0.10*S → 0.42*S, Y = ±0.10*S, Z = 0 → 0.10*S (scaled).
+        Bed covers X = 0.10*S → 0.42*S, Y = ±0.10*S, Z = 0 → 0.10*S.
+        S=SCALE for URDF (×10), S=1 for USD (real metres).
         Invisible side walls at Y = ±0.50*S contain all particles.
 
         IMPORTANT: bed_lo.z is raised by one particle radius after cell_size is
         computed.  This ensures the lowest jittered particles (jitter offset =
         −radius) land at z ≥ 0 and never penetrate the ground plane.
         """
-        S = SCALE
         particles_per_cell = 3.0
         density = 1000.0  # kg/m³  granular example default
 
@@ -285,14 +299,18 @@ class ExcavatorExample:
     def step(self):
         # Compute target joint angles for this frame
         if self._manual:
-            # Slew-rate limiter: arm chases slider target at max 0.8 rad/s.
-            # Prevents large per-frame jumps from creating explosive
-            # finite_difference velocities on contact with particles.
-            max_delta = 1.5 * self.frame_dt  # ~0.025 rad per frame @ 60 fps
-            prev_sh = self._joint_q_np[self._shoulder_dof]
-            prev_bk = self._joint_q_np[self._bucket_dof]
-            shoulder = prev_sh + float(np.clip(self._slider_shoulder - prev_sh, -max_delta, max_delta))
-            bucket   = prev_bk + float(np.clip(self._slider_bucket   - prev_bk, -max_delta, max_delta))
+            # Exponential smoothing: each frame advance 8% toward slider target.
+            # Gives natural deceleration as arm approaches target (feels smooth).
+            # Hard cap keeps per-frame delta safe for MPM finite_difference velocity.
+            alpha = 0.08
+            max_delta = 2.0 * self.frame_dt
+            for attr, tgt in (("_smooth_shoulder", self._slider_shoulder),
+                               ("_smooth_bucket",   self._slider_bucket)):
+                prev = getattr(self, attr)
+                raw  = prev + alpha * (tgt - prev)
+                setattr(self, attr, prev + float(np.clip(raw - prev, -max_delta, max_delta)))
+            shoulder = self._smooth_shoulder
+            bucket   = self._smooth_bucket
         else:
             shoulder, bucket = self._scripted_targets()
         curr_q = self._joint_q_np.copy()
@@ -378,8 +396,10 @@ class ExcavatorExample:
 if __name__ == "__main__":
     parser = newton.examples.create_parser()
     parser.add_argument(
-        "--usd", type=str, default=None, metavar="PATH",
-        help="USD file from Isaac Sim (overrides URDF)",
+        "--usd", type=str,
+        default=str(USD_PATH) if USD_PATH.exists() else None,
+        metavar="PATH",
+        help="USD file (default: arm.usd in same folder if present)",
     )
     viewer, args = newton.examples.init(parser)
 
