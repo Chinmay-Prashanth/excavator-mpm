@@ -80,8 +80,12 @@ class ExcavatorExample:
         # USD is in real meters (no scaling); URDF needs ×SCALE.
         S = 1.0 if usd_path else SCALE
 
+        # base_z=0.23m: shoulder joint sits at Z=0.255m.
+        # At shoulder=-90°: bucket_joint Z = 0.255 - 0.250 = 0.005m (just above ground, in sand).
+        # At shoulder=-60°: bucket_joint Z = 0.255 - 0.217 = 0.038m (mid-sand).
+        # Old value 0.40m was too high — bucket_joint Z at -90° was 0.175m, above the 10cm sand bed.
         base_xform = wp.transform(
-            wp.vec3(0.0, 0.0, 0.40 * S), wp.quat_identity()  # raised: bucket stays above ground at shoulder=-90deg
+            wp.vec3(0.0, 0.0, 0.23 * S), wp.quat_identity()
         )
 
         if usd_path:
@@ -110,13 +114,13 @@ class ExcavatorExample:
         for joint_idx, label in enumerate(builder.joint_label):
             dof = builder.joint_qd_start[joint_idx]
             if "shoulder_joint" in label:
-                builder.joint_limit_lower[dof] = -math.pi * 0.6
-                builder.joint_limit_upper[dof] =  math.pi * 0.6
+                builder.joint_limit_lower[dof] = -math.pi / 2        # −90°
+                builder.joint_limit_upper[dof] =  math.pi / 2        # +90°
                 self._shoulder_dof = dof
                 print(f"  shoulder_joint → DOF {dof}")
             elif "bucket_joint" in label:
-                builder.joint_limit_lower[dof] = -math.pi * 0.7
-                builder.joint_limit_upper[dof] =  math.pi * 0.6
+                builder.joint_limit_lower[dof] = -math.radians(135)  # −135° dump
+                builder.joint_limit_upper[dof] =  math.radians(135)  # +135° scoop
                 self._bucket_dof = dof
                 print(f"  bucket_joint   → DOF {dof}")
 
@@ -145,11 +149,11 @@ class ExcavatorExample:
                 else:
                     print(f"  body[{body}] shape[{shape}]: particle collision ENABLED")
 
-        # ── Initial pose (arm elevated above sand bed) ─────────────────────────
+        # ── Initial pose: both joints at 0° — trajectory starts from here ────
         if self._shoulder_dof is not None:
-            builder.joint_q[self._shoulder_dof] = 0.8
+            builder.joint_q[self._shoulder_dof] = 0.0
         if self._bucket_dof is not None:
-            builder.joint_q[self._bucket_dof] = 0.2
+            builder.joint_q[self._bucket_dof] = 0.0
 
         # ── Ground plane + side walls ─────────────────────────────────────────
         builder.add_ground_plane()
@@ -164,14 +168,14 @@ class ExcavatorExample:
         SolverImplicitMPM.register_custom_attributes(builder)
 
         # ── Sand particles (into the SAME builder) ────────────────────────────
-        # USD (S=1): vox=0.010m → ~192k particles, dia=3.3mm, ~50-60 FPS on RTX 4080 Laptop
+        # USD (S=1): vox=0.008m → ~363k particles, dia=2.7mm, ~45 FPS on RTX 4080 Laptop
         # URDF (S=10): same ratio → 0.10m voxels
-        voxel_size = 0.010 * S
+        voxel_size = 0.008 * S
         self._emit_particles(builder, voxel_size, S)
 
         # ── Finalize single model ──────────────────────────────────────────────
         self.model = builder.finalize()
-        self.model.mpm.hardening.fill_(0.0)  # Chrono CRM: no strain hardening (cohesionless sand)
+        self.model.mpm.hardening.fill_(0.0)  # no strain hardening
         print(f"Sand particles: {self.model.particle_count}")
         print(f"Bodies: {self.model.body_count}  Shapes: {self.model.shape_count}")
 
@@ -275,7 +279,7 @@ class ExcavatorExample:
                 "mpm:young_modulus":         1.0e15, # rigid limit — granular example default
                 "mpm:poisson_ratio":         0.30,   # granular example default
                 "mpm:yield_pressure":        1.0e12, # caps compressive yield — critical for stability
-                "mpm:tensile_yield_ratio":   0.0,    # no tensile strength (cohesionless sand)
+                "mpm:tensile_yield_ratio":   0.0,    # cohesionless sand
             },
         )
 
@@ -283,28 +287,45 @@ class ExcavatorExample:
 
     def _scripted_targets(self) -> tuple[float, float]:
         """
-        Cosine-interpolated 4-phase dig cycle → (shoulder_rad, bucket_rad).
+        3-phase dig cycle → (shoulder_rad, bucket_rad).
+
+        Phase 1 (0–2 s)  — bucket pre-curls to −135° (scoop), shoulder holds at 0°.
+        Phase 2 (2–5 s)  — shoulder descends LINEARLY to −90° into sand; bucket holds.
+        Phase 3 (5–8 s)  — both joints cosine-return to 0° simultaneously (same fraction).
 
         Joint axis (0, −1, 0):
-          positive angle → tip toward +Z (arm up / bucket open)
-          negative angle → tip toward −Z (arm down / bucket curls)
+          negative angle → tip toward −Z (arm down / bucket curls to scoop)
+          positive angle → tip toward +Z (arm up / bucket opens)
+
+        At base_z=0.23m:  shoulder_joint world Z = 0.255m
+          shoulder=−90° → bucket_joint Z = 0.255 − 0.250 = 0.005m  [at sand surface]
         """
-        CYCLE = 8.0
+        BUCKET_SCOOP = math.radians(135)    # +135°: scoop / dig position
+        BUCKET_DUMP  = -math.radians(135)   # −135°: dump / drop position
+        SHOULDER_DIG = -math.pi / 2          # −90°: arm pointing straight down
+
+        CYCLE = 10.0
         t = self.sim_time % CYCLE
 
         def cos_lerp(a: float, b: float, tt: float) -> float:
             tt = max(0.0, min(1.0, tt))
-            s = 0.5 - 0.5 * math.cos(math.pi * tt)
-            return a + (b - a) * s
+            return a + (b - a) * (0.5 - 0.5 * math.cos(math.pi * tt))
 
-        if t < 2.0:        # lower arm into sand
-            return cos_lerp(0.8, -0.35, t / 2.0), 0.2
-        elif t < 4.0:      # curl bucket to scoop
-            return -0.35,  cos_lerp(0.2, -1.0, (t - 2.0) / 2.0)
-        elif t < 6.0:      # lift arm with material
-            return cos_lerp(-0.35, 0.6, (t - 4.0) / 2.0), -1.0
-        else:              # open bucket, return to start
-            return cos_lerp(0.6, 0.8, (t - 6.0) / 2.0), cos_lerp(-1.0, 0.2, (t - 6.0) / 2.0)
+        def lin_lerp(a: float, b: float, tt: float) -> float:
+            tt = max(0.0, min(1.0, tt))
+            return a + (b - a) * tt
+
+        if t < 2.0:        # Phase 1: bucket curls to +135° (scoop); shoulder at 0°
+            return 0.0, cos_lerp(0.0, BUCKET_SCOOP, t / 2.0)
+        elif t < 5.0:      # Phase 2: shoulder descends linearly to −90°; bucket holds
+            return lin_lerp(0.0, SHOULDER_DIG, (t - 2.0) / 3.0), BUCKET_SCOOP
+        elif t < 8.0:      # Phase 3: both return to 0° simultaneously (same fraction)
+            f = (t - 5.0) / 3.0
+            return cos_lerp(SHOULDER_DIG, 0.0, f), cos_lerp(BUCKET_SCOOP, 0.0, f)
+        elif t < 9.0:      # Phase 4: bucket dumps to −135° to drop particles
+            return 0.0, cos_lerp(0.0, BUCKET_DUMP, (t - 8.0) / 1.0)
+        else:              # Phase 5: bucket returns to 0° — ready for next cycle
+            return 0.0, cos_lerp(BUCKET_DUMP, 0.0, (t - 9.0) / 1.0)
 
     # ── Simulation step ───────────────────────────────────────────────────────
 
