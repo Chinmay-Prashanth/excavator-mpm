@@ -123,17 +123,27 @@ class ExcavatorExample:
         if self._shoulder_dof is None or self._bucket_dof is None:
             print("WARNING: joints not found. Labels:", builder.joint_label)
 
-        # ── Disable MPM particle collision on non-bucket bodies ───────────────
-        # Pattern from anymal example: only the "active" contact body collides
-        # with particles.  Base and shoulder meshes span the entire sand bed at
-        # their scaled size (>1 m) — registering them as MPM colliders causes
-        # explosive contact forces.
+        # ── Configure MPM particle collision per shape ────────────────────────
+        # Only the bucket collision mesh participates in particle contact.
+        # - Base/shoulder: too large, causes explosive contact forces.
+        # - Bucket visual shape: identical to collision mesh — having both
+        #   enabled doubles the SDF force and can eject particles from bucket.
         for body in range(builder.body_count):
             label = (builder.body_label[body] or "").lower()
-            if "bucket" not in label:
-                for shape in builder.body_shapes[body]:
+            is_bucket_body = "bucket" in label
+            for shape in builder.body_shapes[body]:
+                shape_label = (builder.shape_label[shape] if shape < len(builder.shape_label) else "") or ""
+                has_collision_tag = "collision" in shape_label.lower()
+                has_visual_tag    = "visual"    in shape_label.lower()
+                # USD: each body has both visual + collision shapes — only enable
+                # the collision shape on the bucket.
+                # URDF: shapes have no visual/collision tags — enable all bucket shapes.
+                is_active = is_bucket_body and (has_collision_tag or (not has_visual_tag and not has_collision_tag))
+                if not is_active:
                     builder.shape_flags[shape] &= ~int(newton.ShapeFlags.COLLIDE_PARTICLES)
-                    print(f"  body[{body}] '{label}' shape[{shape}]: particle collision disabled")
+                    print(f"  body[{body}] shape[{shape}]: particle collision disabled")
+                else:
+                    print(f"  body[{body}] shape[{shape}]: particle collision ENABLED")
 
         # ── Initial pose (arm elevated above sand bed) ─────────────────────────
         if self._shoulder_dof is not None:
@@ -206,7 +216,7 @@ class ExcavatorExample:
         self.mpm_solver.setup_collider(
             body_mass=wp.zeros_like(self.model.body_mass),
             body_q=self.state_0.body_q,
-            collider_thicknesses=[0.0, 0.75 * voxel_size],  # static body (ground+walls): none; bucket: 3/4 voxel
+            collider_thicknesses=[0.0, 2.0 * voxel_size],  # static (ground+walls): none; bucket: 2× voxel (walls ~2mm << voxel)
         )
 
         # ── Viewer ────────────────────────────────────────────────────────────
