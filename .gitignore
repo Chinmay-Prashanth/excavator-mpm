@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.thumbs/
+imgui.ini
+arm.usd
+*.log
