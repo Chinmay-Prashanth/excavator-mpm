@@ -196,7 +196,7 @@ class ExcavatorExample:
         mpm_options.voxel_size            = voxel_size
         mpm_options.tolerance             = 1.0e-5
         mpm_options.grid_type             = "sparse"  # dynamic — follows particles, no fixed bounding box
-        mpm_options.grid_padding          = 10
+        mpm_options.grid_padding          = 0   # granular example default; 10 inflates FEM matrix → OOM
         mpm_options.max_active_cell_count = -1        # unlimited — let solver allocate as needed
         mpm_options.strain_basis          = "P0"
         mpm_options.max_iterations        = 250       # solver default — do not reduce for large particle counts
